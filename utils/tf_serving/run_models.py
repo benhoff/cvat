@@ -13,14 +13,18 @@ cvat_dir = os.path.join(work_dir, '..', '..')
 
 sys.path.insert(0, cvat_dir)
 
-from cvat.apps.tf_server_client.tf_handlers import do_inference
+# from cvat.apps.tf_server_client.tf_handlers import do_inference
+from cvat.apps.tf_server_client.clean_file import do_inference
 
 
 def _get_kwargs():
     parser = argparse.ArgumentParser()
     parser.add_argument('--py', required=True, help='Path to the python interpt file')
-    parser.add_argument('--pb', required=True, help='Path to the inference file')
+    parser.add_argument('--name', required=True)
     parser.add_argument('--json', required=True, help='Path to the JSON mapping file')
+    # FIXME: this is not right
+    parser.add_argument('--port', required=True)
+    parser.add_argument('--tf-method-name', default='predict')
     parser.add_argument('--restricted', dest='restricted', action='store_true')
     parser.add_argument('--unrestricted', dest='restricted', action='store_false')
     parser.add_argument('--image-files', nargs='*', help='Paths to image files you want to test')
@@ -31,20 +35,16 @@ def _get_kwargs():
     
     return vars(parser.parse_args())
 
+
+def main():
+    kwargs = _get_kwargs()
     py_file = kwargs['py']
-    pb_file = kwargs['pb']
     mapping_file = kwargs['json']
+    name = kwargs['name']
+    port = kwargs['port']
 
     if not os.path.isfile(py_file):
         logging.critical('Py file not found! Check the path')
-        return
-
-    if not os.path.isfile(bin_file):
-        logging.critical('Bin file is not found! Check path!')
-        return
-
-    if not os.path.isfile(xml_file):
-        logging.critical('XML File not found! Check path!')
         return
 
     if not os.path.isfile(mapping_file):
@@ -76,12 +76,16 @@ def _get_kwargs():
         test_image = np.ones((1024, 1980, 3), np.uint8) * 255
         image_data = [test_image,]
     attribute_spec = {}
+    hostport = 9000
 
     results = do_inference(image_data,
+                           name,
+                           port,
                            mapping,
                            attribute_spec,
                            py_file,
                            restricted=restricted)
 
-def main():
-    kwargs = _get_kwargs()
+
+if __name__ == '__main__':
+    main()

@@ -1,11 +1,5 @@
 import rq
 
-import grpc
-
-import tensorflow as tf
-from tensorflow_serving.apis import prediction_service_pb2_grpc
-from tensorflow_serving.apis import predict_pb2
-
 from cvat.apps.engine.log import slogger
 from cvat.apps.engine.models import Task as TaskModel
 from cvat.apps.engine.serializers import LabeledDataSerializer
@@ -33,7 +27,9 @@ def do_inference_and_update_rq_worker(task_id: int, model_id: int):
 
         image_loader: ImageLoader = _get_image_loader(db_task.get_data_dirname())
 
-        result = do_inference(image_loader, model.model_name, model.signature_name)
+        data = [d for d in image_loader]
+
+        result = do_inference(data, model.model_name, model.signature_name)
 
         if result is None:
             slogger.glob.info("auto annotation for task {} canceled by user".format(task_id))
@@ -56,15 +52,3 @@ def do_inference_and_update_rq_worker(task_id: int, model_id: int):
 
         raise e
 
-# Note:     request.model_spec.signature_name = 'predict_images'
-# https://github.com/tensorflow/serving/blob/master/tensorflow_serving/example/mnist_client.py
-def do_inference(image_loader: ImageLoader, model_name: str, signature_name: str):
-    channel = grpc.insecure_channel(hostport)
-    stub = prediction_service_pb2_grpc.PredictionServiceStub(channel)
-    for frame in image_loader:
-        # orig_rows, orig_cols = frame.shape[:2]
-        request = predict_pb2.PredictRequest()
-        request.model_spec.name = model_name
-        tensor = tf.contrib.util.make_tensor_proto(frame, shape=[1]+list(frame.shape))
-        request.inputs['input'].CopyFrom(tensor)
-        response = stub.predict(request, 30.0)

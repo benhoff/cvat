@@ -1,0 +1,12 @@
+version: '3'
+
+services:
+  serving:
+    build: .
+    image: testing-models
+    container_name: tf
+    command: --model_config_file=/config/config.conf
+    ports:
+            - "8500:8500"
+            - "8501:8501"
+

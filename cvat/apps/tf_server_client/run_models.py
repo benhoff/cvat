@@ -9,7 +9,7 @@ import numpy as np
 import cv2
 
 work_dir = os.path.dirname(os.path.abspath(__file__))
-cvat_dir = os.path.join(work_dir, '..', '..')
+cvat_dir = os.path.join(work_dir, '..', '..', '..')
 
 sys.path.insert(0, cvat_dir)
 

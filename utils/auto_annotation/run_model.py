@@ -1,27 +1,18 @@
 import os
-import sys
-import json
 import argparse
-import random
 import logging
-
-import numpy as np
-import cv2
-
-work_dir = os.path.dirname(os.path.abspath(__file__))
-cvat_dir = os.path.join(work_dir, '..', '..')
-
-sys.path.insert(0, cvat_dir)
-
-from cvat.apps.auto_annotation.inference import run_inference_engine_annotation
 
 
 def _get_kwargs():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--py', required=True, help='Path to the python interpt file')
-    parser.add_argument('--xml', required=True, help='Path to the xml file')
-    parser.add_argument('--bin', required=True, help='Path to the bin file')
-    parser.add_argument('--json', required=True, help='Path to the JSON mapping file')
+    parser.add_argument('--py', help='Path to the python interpt file')
+    parser.add_argument('--xml', help='Path to the xml file')
+    parser.add_argument('--bin', help='Path to the bin file')
+    parser.add_argument('--json', help='Path to the JSON mapping file')
+
+    parser.add_argument('--model-name', help='English name given to a model in the Model Manager')
+    parser.add_argument('--job-id', type=int, help='integer job id used to test model. Can be found on the CVAT page')
+
     parser.add_argument('--restricted', dest='restricted', action='store_true')
     parser.add_argument('--unrestricted', dest='restricted', action='store_false')
     parser.add_argument('--image-files', nargs='*', help='Paths to image files you want to test')
@@ -33,136 +24,61 @@ def _get_kwargs():
     return vars(parser.parse_args())
 
 
-def random_color():
-    rgbl=[255,0,0]
-    random.shuffle(rgbl)
-    return tuple(rgbl)
+def _valid_docker_args(model_name, job_id):
+    pass
 
 
-def pairwise(iterable):
-    result = []
-    for i in range(0, len(iterable) - 1, 2):
-        result.append((iterable[i], iterable[i+1]))
-    return np.array(result, dtype=np.int32)
+def _valid_local_args(py_file, mapping_file, bin_file, xml_file) -> bool:
+    if py_file is None or not os.path.isfile(py_file):
+        logging.critical('Py file not found! Check the path')
+        return False
+
+    if bin_file is None or not os.path.isfile(bin_file):
+        logging.critical('Bin file is not found! Check path!')
+        return False
+
+    if xml_file is None or not os.path.isfile(xml_file):
+        logging.critical('XML File not found! Check path!')
+        return False
+
+    if mapping_file is None or not os.path.isfile(mapping_file):
+        logging.critical('JSON file is not found! Check path!')
+        return False
+
+
+    return True
 
 
 def main():
     kwargs = _get_kwargs()
 
-    py_file = kwargs['py']
-    bin_file = kwargs['bin']
-    mapping_file = kwargs['json']
-    xml_file = kwargs['xml']
+    py_file = kwargs.get('py')
+    mapping_file = kwargs.get('json')
+    bin_file = kwargs.get('bin')
+    xml_file = kwargs.get('xml')
 
-    if not os.path.isfile(py_file):
-        logging.critical('Py file not found! Check the path')
-        return
+    model_name = kwargs.get('model_name')
+    job_id = kwargs.get('job_id')
 
-    if not os.path.isfile(bin_file):
-        logging.critical('Bin file is not found! Check path!')
-        return
-
-    if not os.path.isfile(xml_file):
-        logging.critical('XML File not found! Check path!')
-        return
-
-    if not os.path.isfile(mapping_file):
-        logging.critical('JSON file is not found! Check path!')
-        return
-
-    with open(mapping_file) as json_file:
-        try:
-            mapping = json.load(json_file)
-        except json.decoder.JSONDecodeError:
-            logging.critical('JSON file not able to be parsed! Check file')
-            return
-
-    try:
-        mapping = mapping['label_map']
-    except KeyError:
-        logging.critical("JSON Mapping file must contain key `label_map`!")
-        logging.critical("Exiting")
-        return
-
-    mapping = {int(k): v for k, v in mapping.items()}
-
+    # NOTE: This might move
     restricted = kwargs['restricted']
-    image_files = kwargs.get('image_files')
 
-    if image_files:
-        image_data = [cv2.imread(f) for f in image_files]
-    else:
-        test_image = np.ones((1024, 1980, 3), np.uint8) * 255
-        image_data = [test_image,]
-    attribute_spec = {}
+    is_docker_test = mdoel_name or job_id or job_id == 0
+    is_local_test = py_file or mapping_file or bin_file or xml_file
 
-    results = run_inference_engine_annotation(image_data,
-                                              xml_file,
-                                              bin_file,
-                                              mapping,
-                                              attribute_spec,
-                                              py_file,
-                                              restricted=restricted)
+    if is_docker_test:
+        if not _valid_docker_args(model_name, job_id):
+            return 1
+        from _run_docker_test import run_docker_test
+        run_docker_test(model_name, job_id, kwargs)
 
-    if kwargs['serialize']:
-        os.environ['DJANGO_SETTINGS_MODULE'] = 'cvat.settings.production'
-        import django
-        django.setup()
+    if is_local_test:
+        if not _valid_local_args(py_file, mapping_file, bin_file, xml_file):
+            return 2
 
-        from cvat.apps.engine.serializers import LabeledDataSerializer
+        from _run_local_test import run_local_test
+        run_local_test(py_file, mapping_file, bin_file, xml_file, kwargs)
 
-        # NOTE: We're actually using `run_inference_engine_annotation`
-        # incorrectly here. The `mapping` dict is supposed to be a mapping
-        # of integers -> integers and represents the transition from model
-        # integers to the labels in the database. We're using a mapping of
-        # integers -> strings. For testing purposes, this shortcut is fine.
-        # We just want to make sure everything works. Until, that is....
-        # we want to test using the label serializer. Then we have to transition
-        # back to integers, otherwise the serializer complains about have a string
-        # where an integer is expected. We'll just brute force that.
-
-        for shape in results['shapes']:
-            # Change the english label to an integer for serialization validation
-            shape['label_id'] = 1
-
-        serializer = LabeledDataSerializer(data=results)
-
-        if not serializer.is_valid():
-            logging.critical('Data unable to be serialized correctly!')
-            serializer.is_valid(raise_exception=True)
-
-    logging.warning('Program didn\'t have any errors.')
-    show_images = kwargs.get('show_images', False)
-
-    if show_images:
-        if image_files is None:
-            logging.critical("Warning, no images provided!")
-            logging.critical('Exiting without presenting results')
-            return
-
-        if not results['shapes']:
-            logging.warning(str(results))
-            logging.critical("No objects detected!")
-            return
-
-        show_image_delay = kwargs['show_image_delay']
-        for index, data in enumerate(image_data):
-            for detection in results['shapes']:
-                if not detection['frame'] == index:
-                    continue
-                points = detection['points']
-                # Cv2 doesn't like floats for drawing
-                points = [int(p) for p in points]
-                color = random_color()
-                if detection['type'] == 'rectangle':
-                    cv2.rectangle(data, (points[0], points[1]), (points[2], points[3]), color, 3)
-                elif detection['type'] in ('polygon', 'polyline'):
-                    # polylines is picky about datatypes
-                    points = pairwise(points)
-                    cv2.polylines(data, [points], 1, color)
-            cv2.imshow(str(index), data)
-            cv2.waitKey(show_image_delay)
-            cv2.destroyWindow(str(index))
 
 if __name__ == '__main__':
     main()
